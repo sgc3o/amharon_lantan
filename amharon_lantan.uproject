@@ -3,6 +3,13 @@
 	"EngineAssociation": "5.4",
 	"Category": "",
 	"Description": "",
+	"Modules": [
+		{
+			"Name": "amharon_lantan",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
 	"Plugins": [
 		{
 			"Name": "OpenXR",
@@ -142,6 +149,10 @@
 				"Win64",
 				"Mac"
 			]
+		},
+		{
+			"Name": "MagicBulletLooks",
+			"Enabled": false
 		}
 	]
 }
