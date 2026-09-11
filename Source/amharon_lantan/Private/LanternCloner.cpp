@@ -3,8 +3,12 @@
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/World.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UObject/UObjectGlobals.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogLanternCloner, Log, All);
 
 namespace LanternClonerNames
 {
@@ -36,6 +40,8 @@ ALanternCloner::ALanternCloner()
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BodyCYellow(TEXT("/Game/c4d/rantan/Materials/MI_LanternBody_C_Yellow.MI_LanternBody_C_Yellow"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BodyDOrange(TEXT("/Game/c4d/rantan/Materials/MI_LanternBody_D_Orange.MI_LanternBody_D_Orange"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BodyDPurple(TEXT("/Game/c4d/rantan/Materials/MI_LanternBody_D_Purple.MI_LanternBody_D_Purple"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BodyARed2(TEXT("/Game/c4d/rantan/Materials/MI_LanternBody_A_Red2.MI_LanternBody_A_Red2"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BodyCYellow2(TEXT("/Game/c4d/rantan/Materials/MI_LanternBody_C_Yellow2.MI_LanternBody_C_Yellow2"));
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TasselARed(TEXT("/Game/c4d/rantan/Materials/MI_LanternTassel_A_Red.MI_LanternTassel_A_Red"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TasselABlue(TEXT("/Game/c4d/rantan/Materials/MI_LanternTassel_A_Blue.MI_LanternTassel_A_Blue"));
@@ -94,37 +100,118 @@ ALanternCloner::ALanternCloner()
 	AddVariant(TEXT("C_Yellow"), 2, 5, BodyBC.Object, BodyCYellow.Object, BodyTransformC, TasselCYellow.Object, TasselTransformC, FrameC.Object, FrameTransformC);
 	AddVariant(TEXT("D_Orange"), 3, 6, BodyD.Object, BodyDOrange.Object, BodyTransformD, TasselDOrange.Object, TasselTransformD, FrameD.Object, FrameTransformD);
 	AddVariant(TEXT("D_Purple"), 3, 7, BodyD.Object, BodyDPurple.Object, BodyTransformD, TasselDPurple.Object, TasselTransformD, FrameD.Object, FrameTransformD);
+	AddVariant(TEXT("A_Red2"), 0, 0, BodyA.Object, BodyARed2.Object, BodyTransformA, TasselARed.Object, TasselTransformA, FrameA.Object, FrameTransformA);
+	AddVariant(TEXT("C_Yellow2"), 2, 5, BodyBC.Object, BodyCYellow2.Object, BodyTransformC, TasselCYellow.Object, TasselTransformC, FrameC.Object, FrameTransformC);
 }
 
 void ALanternCloner::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
-	if (bGenerationEnabled)
+	// Construction also runs during editor load, property edits and BP reinstancing.
+	// Saved instances are authoritative until an explicit generation command.
+	UE_LOG(LogLanternCloner, Log, TEXT("OnConstruction %s: no generation"), *GetPathName());
+}
+
+void ALanternCloner::PostLoad()
+{
+	Super::PostLoad();
+	UE_LOG(LogLanternCloner, Log, TEXT("PostLoad %s: no instance mutation"), *GetPathName());
+}
+
+void ALanternCloner::PostRegisterAllComponents()
+{
+	Super::PostRegisterAllComponents();
+	UE_LOG(LogLanternCloner, Log, TEXT("PostRegisterAllComponents %s: no generation"), *GetPathName());
+}
+
+#if WITH_EDITOR
+void ALanternCloner::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	UE_LOG(LogLanternCloner, Log, TEXT("PostEditChangeProperty %s: explicit Preview/Generate required"), *GetPathName());
+}
+
+void ALanternCloner::PostEditMove(bool bFinished)
+{
+	Super::PostEditMove(bFinished);
+	UE_LOG(LogLanternCloner, Verbose, TEXT("PostEditMove %s: no generation"), *GetPathName());
+}
+#endif
+
+bool ALanternCloner::CanUpdateInstances() const
+{
+	const UWorld* World = GetWorld();
+	if (!IsInGameThread() || IsTemplate() || bUpdatingInstances || !World
+		|| HasAnyFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects)
+		|| IsRunningUserConstructionScript() || World->bIsRunningConstructionScript
+		|| (World->WorldType != EWorldType::Editor && !World->IsGameWorld()))
 	{
-		RebuildInstances();
+		UE_LOG(LogLanternCloner, Warning, TEXT("Generation rejected during load/construction/reentry: %s"), *GetPathName());
+		return false;
 	}
-	else
+	TArray<UHierarchicalInstancedStaticMeshComponent*> Components;
+	GetComponents(Components);
+	for (const UHierarchicalInstancedStaticMeshComponent* Component : Components)
 	{
-		ClearGeneratedComponents();
+		if (IsValid(Component) && Component->ComponentTags.Contains(LanternClonerNames::GeneratedTag)
+			&& (Component->IsAsyncBuilding() || Component->IsCompiling()
+				|| Component->HasAnyFlags(RF_NeedLoad | RF_NeedPostLoad)))
+		{
+			// Do not pump the task graph or partially clear other buckets. Retry explicitly
+			// after the engine's pending build/mesh compilation has completed.
+			UE_LOG(LogLanternCloner, Warning, TEXT("Generation deferred: %s is still building; retry the button when ready"), *Component->GetPathName());
+			return false;
+		}
 	}
+	return true;
+}
+
+bool ALanternCloner::IsGeneratedDataConsistent() const
+{
+	TArray<UHierarchicalInstancedStaticMeshComponent*> Components;
+	GetComponents(Components);
+	for (const UHierarchicalInstancedStaticMeshComponent* Component : Components)
+	{
+		if (!IsValid(Component) || !Component->ComponentTags.Contains(LanternClonerNames::GeneratedTag))
+		{
+			continue;
+		}
+		const int32 Count = Component->GetInstanceCount();
+		if (Component->IsAsyncBuilding() || Component->IsCompiling() || !Component->IsTreeFullyBuilt()
+			|| Component->InstanceReorderTable.Num() != Count || Component->NumBuiltInstances != Count)
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 void ALanternCloner::Generate()
 {
-	bGenerationEnabled = true;
 	RebuildInstances();
 }
 
 void ALanternCloner::Regenerate()
 {
-	bGenerationEnabled = true;
 	RebuildInstances();
+}
+
+void ALanternCloner::Preview()
+{
+	RebuildInstances(true);
 }
 
 void ALanternCloner::Clear()
 {
+	if (!CanUpdateInstances())
+	{
+		return;
+	}
+	TGuardValue<bool> UpdateGuard(bUpdatingInstances, true);
+	Modify();
 	bGenerationEnabled = false;
 	ClearGeneratedComponents();
+	UE_LOG(LogLanternCloner, Log, TEXT("Clear complete %s: components retained"), *GetPathName());
 }
 
 void ALanternCloner::ClearGeneratedComponents()
@@ -135,8 +222,12 @@ void ALanternCloner::ClearGeneratedComponents()
 	{
 		if (IsValid(Component) && Component->ComponentTags.Contains(LanternClonerNames::GeneratedTag))
 		{
+			Component->Modify();
+			Component->bAutoRebuildTreeOnInstanceChanges = false;
 			Component->ClearInstances();
-			Component->DestroyComponent();
+			// UE 5.4 ClearInstances does not empty InstanceReorderTable itself.
+			// ApplyEmpty through the public sync builder before any new additions.
+			Component->BuildTreeIfOutdated(false, true);
 		}
 	}
 
@@ -144,6 +235,12 @@ void ALanternCloner::ClearGeneratedComponents()
 	GeneratedLanternCount = 0;
 	GeneratedMeshInstanceCount = 0;
 	GeneratedHISMGroupCount = 0;
+	GeneratedVariantCounts.Reset();
+	MaxConsecutiveSameShapeRun = 0;
+	MaxConsecutiveSameColorRun = 0;
+	ForegroundCenterCandidateCount = 0;
+	GeneratedForegroundCenterCount = 0;
+	GeneratedMidFarCenterCount = 0;
 }
 
 UHierarchicalInstancedStaticMeshComponent* ALanternCloner::FindOrCreateBucket(
@@ -162,10 +259,24 @@ UHierarchicalInstancedStaticMeshComponent* ALanternCloner::FindOrCreateBucket(
 	{
 		return *Existing;
 	}
+	TArray<UHierarchicalInstancedStaticMeshComponent*> ExistingComponents;
+	GetComponents(ExistingComponents);
+	for (UHierarchicalInstancedStaticMeshComponent* Existing : ExistingComponents)
+	{
+		if (IsValid(Existing) && Existing->ComponentTags.Contains(LanternClonerNames::GeneratedTag)
+			&& Existing->GetStaticMesh() == Mesh && Existing->GetMaterial(0) == (Material ? Material : Mesh->GetMaterial(0)))
+		{
+			Existing->SetCastShadow(bCastShadows);
+			Buckets.Add(Key, Existing);
+			GeneratedComponents.Add(Existing);
+			return Existing;
+		}
+	}
 
-	const FName ComponentName(*FString::Printf(TEXT("HISM_Lantern_%02d"), Buckets.Num()));
+	const FName ComponentName = MakeUniqueObjectName(this, UHierarchicalInstancedStaticMeshComponent::StaticClass(), TEXT("HISM_Lantern"));
 	UHierarchicalInstancedStaticMeshComponent* Component = NewObject<UHierarchicalInstancedStaticMeshComponent>(this, ComponentName, RF_Transactional);
-	Component->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+	Component->bAutoRebuildTreeOnInstanceChanges = false;
+	Component->CreationMethod = EComponentCreationMethod::Instance;
 	Component->ComponentTags.Add(LanternClonerNames::GeneratedTag);
 	Component->SetupAttachment(SceneRoot);
 	Component->SetStaticMesh(Mesh);
@@ -190,22 +301,50 @@ UHierarchicalInstancedStaticMeshComponent* ALanternCloner::FindOrCreateBucket(
 	return Component;
 }
 
-void ALanternCloner::RefillShuffleBag(FRandomStream& Stream, TArray<int32>& Bag) const
+void ALanternCloner::RefillShuffleBag(FRandomStream& Stream, TArray<int32>& Bag, int32 PreviousVariantIndex) const
 {
-	Bag.Reset();
+	TArray<int32> BaseBag;
 	for (int32 VariantIndex = 0; VariantIndex < LanternVariants.Num(); ++VariantIndex)
 	{
 		const int32 Tickets = FMath::Max(1, FMath::RoundToInt(LanternVariants[VariantIndex].Weight));
 		for (int32 Ticket = 0; Ticket < Tickets; ++Ticket)
 		{
-			Bag.Add(VariantIndex);
+			BaseBag.Add(VariantIndex);
 		}
 	}
 
-	for (int32 Index = Bag.Num() - 1; Index > 0; --Index)
+	for (int32 Attempt = 0; Attempt < 64; ++Attempt)
 	{
-		const int32 SwapIndex = Stream.RandRange(0, Index);
-		Bag.Swap(Index, SwapIndex);
+		Bag = BaseBag;
+		for (int32 Index = Bag.Num() - 1; Index > 0; --Index)
+		{
+			const int32 SwapIndex = Stream.RandRange(0, Index);
+			Bag.Swap(Index, SwapIndex);
+		}
+
+		bool bValidOrder = true;
+		int32 PreviousInSequence = PreviousVariantIndex;
+		for (int32 Position = Bag.Num() - 1; Position >= 0; --Position)
+		{
+			if (LanternVariants.IsValidIndex(PreviousInSequence))
+			{
+				const FLanternVariantDefinition& Previous = LanternVariants[PreviousInSequence];
+				const FLanternVariantDefinition& Candidate = LanternVariants[Bag[Position]];
+				const bool bSameShape = bAvoidConsecutiveSameShape && Candidate.ShapeId == Previous.ShapeId;
+				const bool bSameColor = bAvoidConsecutiveSameColor && Candidate.ColorId == Previous.ColorId;
+				if (bSameShape || bSameColor)
+				{
+					bValidOrder = false;
+					break;
+				}
+			}
+			PreviousInSequence = Bag[Position];
+		}
+
+		if (bValidOrder)
+		{
+			return;
+		}
 	}
 }
 
@@ -213,7 +352,7 @@ int32 ALanternCloner::PopVariantFromShuffleBag(FRandomStream& Stream, TArray<int
 {
 	if (Bag.IsEmpty())
 	{
-		RefillShuffleBag(Stream, Bag);
+		RefillShuffleBag(Stream, Bag, PreviousVariantIndex);
 	}
 	if (Bag.IsEmpty())
 	{
@@ -242,103 +381,139 @@ int32 ALanternCloner::PopVariantFromShuffleBag(FRandomStream& Stream, TArray<int
 	return Result;
 }
 
-float ALanternCloner::GetEffectiveVerticalSpacing(int32 EffectiveVerticalCount) const
+int32 ALanternCloner::PickRandomVariant(FRandomStream& Stream) const
 {
-	if (HeightMode == ELanternHeightMode::TotalHeight && EffectiveVerticalCount > 1)
+	float TotalWeight = 0.0f;
+	for (const FLanternVariantDefinition& Variant : LanternVariants)
 	{
-		return TotalHeight / static_cast<float>(EffectiveVerticalCount - 1);
+		TotalWeight += FMath::Max(0.0f, Variant.Weight);
 	}
-	return VerticalSpacing;
+	if (TotalWeight <= 0.0f)
+	{
+		return LanternVariants.IsEmpty() ? INDEX_NONE : Stream.RandRange(0, LanternVariants.Num() - 1);
+	}
+	float Choice = Stream.FRandRange(0.0f, TotalWeight);
+	for (int32 Index = 0; Index < LanternVariants.Num(); ++Index)
+	{
+		Choice -= FMath::Max(0.0f, LanternVariants[Index].Weight);
+		if (Choice <= 0.0f)
+		{
+			return Index;
+		}
+	}
+	return LanternVariants.Num() - 1;
 }
 
-void ALanternCloner::RebuildInstances()
+void ALanternCloner::RebuildInstances(bool bPreview)
 {
+	if (!CanUpdateInstances())
+	{
+		return;
+	}
+	// A mesh completing compilation can initiate an engine build; avoid mutating
+	// any bucket until every input mesh is ready.
+	for (const FLanternVariantDefinition& Variant : LanternVariants)
+	{
+		for (UStaticMesh* Mesh : { Variant.BodyMesh.Get(), Variant.TasselMesh.Get(), Variant.FrameMesh.Get() })
+		{
+			if (Mesh && Mesh->IsCompiling())
+			{
+				UE_LOG(LogLanternCloner, Warning, TEXT("Generation deferred: mesh compilation in progress"));
+				return;
+			}
+		}
+	}
+	TGuardValue<bool> UpdateGuard(bUpdatingInstances, true);
+	Modify();
+	bGenerationEnabled = true;
+	UE_LOG(LogLanternCloner, Log, TEXT("Explicit %s start %s"), bPreview ? TEXT("Preview") : TEXT("Generate"), *GetPathName());
 	ClearGeneratedComponents();
 	if (!bGenerationEnabled || LanternVariants.IsEmpty())
 	{
 		return;
 	}
 
-	const int32 EffectiveColumnCount = FMath::Max(1, ColumnCount);
-	const int32 EffectiveDepthCount = FMath::Max(1, DepthCount);
 	const int32 RequestedVerticalCount = FMath::Max(1, VerticalCount);
-	const int32 EffectiveVerticalCount = bUsePreviewVerticalCount
+	const int32 EffectiveVerticalCount = bPreview && bUsePreviewVerticalCount
 		? FMath::Min(RequestedVerticalCount, FMath::Max(1, PreviewVerticalCount))
 		: RequestedVerticalCount;
-	const float EffectiveVerticalSpacing = GetEffectiveVerticalSpacing(EffectiveVerticalCount);
-	const float EffectiveScaleMin = FMath::Min(RandomScaleMin, RandomScaleMax);
-	const float EffectiveScaleMax = FMath::Max(RandomScaleMin, RandomScaleMax);
+	const float EffectiveScaleRandom = FMath::Clamp(ScaleRandom, 0.0f, 0.5f);
 
 	FRandomStream Stream(RandomSeed);
 	TArray<int32> ShuffleBag;
 	TMap<FString, UHierarchicalInstancedStaticMeshComponent*> Buckets;
+	TMap<UHierarchicalInstancedStaticMeshComponent*, TArray<FTransform>> PendingTransforms;
+	const int32 PreviewLimit = FMath::Clamp(PreviewMaxLanternCount, 1, 256);
+	int32 VisitedPreviewSlots = 0;
 	int32 PreviousVariantIndex = INDEX_NONE;
+	int32 CurrentSameShapeRun = 0;
+	int32 CurrentSameColorRun = 0;
+	GeneratedVariantCounts.Init(0, LanternVariants.Num());
 
-	for (int32 VerticalIndex = 0; VerticalIndex < EffectiveVerticalCount; ++VerticalIndex)
+	for (int32 VerticalIndex = 0; VerticalIndex < EffectiveVerticalCount && (!bPreview || VisitedPreviewSlots < PreviewLimit); ++VerticalIndex)
 	{
-		for (int32 DepthIndex = 0; DepthIndex < EffectiveDepthCount; ++DepthIndex)
+		++VisitedPreviewSlots;
+		const float Z = static_cast<float>(VerticalIndex) * VerticalSpacing;
+
+		const int32 VariantIndex = CloneMode == ELanternCloneMode::Shuffle
+			? PopVariantFromShuffleBag(Stream, ShuffleBag, PreviousVariantIndex)
+			: PickRandomVariant(Stream);
+		if (!LanternVariants.IsValidIndex(VariantIndex))
 		{
-			for (int32 ColumnIndex = 0; ColumnIndex < EffectiveColumnCount; ++ColumnIndex)
-			{
-				const float X = (static_cast<float>(ColumnIndex) - 0.5f * static_cast<float>(EffectiveColumnCount - 1)) * HorizontalSpacing;
-				const float Y = -static_cast<float>(DepthIndex) * DepthSpacing;
-				const float Z = static_cast<float>(VerticalIndex) * EffectiveVerticalSpacing;
-
-				float LocalDensity = FMath::Clamp(Density, 0.0f, 1.0f);
-				const bool bForegroundLayer = DepthIndex < FMath::Max(1, ForegroundDepthLayerCount);
-				const bool bInsideForegroundCenter = FMath::Abs(X) <= ForegroundGapHalfWidth;
-				if (bEnableForegroundCenterGap && bForegroundLayer && bInsideForegroundCenter)
-				{
-					LocalDensity *= bHardExcludeForegroundCenter ? 0.0f : FMath::Clamp(ForegroundCenterDensity, 0.0f, 1.0f);
-				}
-
-				if (Stream.FRand() > LocalDensity)
-				{
-					continue;
-				}
-
-				const int32 VariantIndex = PopVariantFromShuffleBag(Stream, ShuffleBag, PreviousVariantIndex);
-				if (!LanternVariants.IsValidIndex(VariantIndex))
-				{
-					continue;
-				}
-				PreviousVariantIndex = VariantIndex;
-				const FLanternVariantDefinition& Variant = LanternVariants[VariantIndex];
-
-				const FVector Jitter(
-					Stream.FRandRange(-RandomPositionOffset.X, RandomPositionOffset.X),
-					Stream.FRandRange(-RandomPositionOffset.Y, RandomPositionOffset.Y),
-					Stream.FRandRange(-RandomPositionOffset.Z, RandomPositionOffset.Z));
-				const FRotator RandomRotation(
-					Stream.FRandRange(-RandomPitchRange, RandomPitchRange),
-					Stream.FRandRange(-RandomYawRange, RandomYawRange),
-					Stream.FRandRange(-RandomRollRange, RandomRollRange));
-				const float UniformScale = Stream.FRandRange(EffectiveScaleMin, EffectiveScaleMax);
-				const FTransform LanternTransform(RandomRotation, FVector(X, Y, Z) + Jitter, FVector(UniformScale));
-
-				auto AddPart = [&Buckets, &LanternTransform, this](UStaticMesh* Mesh, UMaterialInterface* Material, const FTransform& PartLocalTransform)
-				{
-					if (UHierarchicalInstancedStaticMeshComponent* Bucket = FindOrCreateBucket(Mesh, Material, Buckets))
-					{
-						Bucket->AddInstance(PartLocalTransform * LanternTransform, false);
-						++GeneratedMeshInstanceCount;
-					}
-				};
-
-				AddPart(Variant.BodyMesh, Variant.BodyMaterial, Variant.BodyLocalTransform);
-				AddPart(Variant.TasselMesh, Variant.TasselMaterial, Variant.TasselLocalTransform);
-				AddPart(Variant.FrameMesh, Variant.FrameMaterial, Variant.FrameLocalTransform);
-				++GeneratedLanternCount;
-			}
+			continue;
 		}
+		const FLanternVariantDefinition& Variant = LanternVariants[VariantIndex];
+		if (LanternVariants.IsValidIndex(PreviousVariantIndex))
+		{
+			const FLanternVariantDefinition& PreviousVariant = LanternVariants[PreviousVariantIndex];
+			CurrentSameShapeRun = PreviousVariant.ShapeId == Variant.ShapeId ? CurrentSameShapeRun + 1 : 1;
+			CurrentSameColorRun = PreviousVariant.ColorId == Variant.ColorId ? CurrentSameColorRun + 1 : 1;
+		}
+		else
+		{
+			CurrentSameShapeRun = 1;
+			CurrentSameColorRun = 1;
+		}
+		MaxConsecutiveSameShapeRun = FMath::Max(MaxConsecutiveSameShapeRun, CurrentSameShapeRun);
+		MaxConsecutiveSameColorRun = FMath::Max(MaxConsecutiveSameColorRun, CurrentSameColorRun);
+		++GeneratedVariantCounts[VariantIndex];
+		PreviousVariantIndex = VariantIndex;
+		const FVector Jitter(
+			Stream.FRandRange(-RandomPositionOffset.X, RandomPositionOffset.X),
+			Stream.FRandRange(-RandomPositionOffset.Y, RandomPositionOffset.Y),
+			Stream.FRandRange(-RandomPositionOffset.Z, RandomPositionOffset.Z));
+		const FRotator RandomRotation(
+			Stream.FRandRange(-RandomPitchRange, RandomPitchRange),
+			Stream.FRandRange(-RandomYawRange, RandomYawRange),
+			Stream.FRandRange(-RandomRollRange, RandomRollRange));
+		const float UniformScale = Stream.FRandRange(1.0f - EffectiveScaleRandom, 1.0f + EffectiveScaleRandom);
+		const FTransform LanternTransform(RandomRotation, FVector(0.0f, 0.0f, Z) + Jitter, FVector(UniformScale));
+
+		auto AddPart = [&Buckets, &PendingTransforms, &LanternTransform, this](UStaticMesh* Mesh, UMaterialInterface* Material, const FTransform& PartLocalTransform)
+		{
+			if (UHierarchicalInstancedStaticMeshComponent* Bucket = FindOrCreateBucket(Mesh, Material, Buckets))
+				{
+				PendingTransforms.FindOrAdd(Bucket).Add(PartLocalTransform * LanternTransform);
+				++GeneratedMeshInstanceCount;
+			}
+		};
+
+		AddPart(Variant.BodyMesh, Variant.BodyMaterial, Variant.BodyLocalTransform);
+		AddPart(Variant.TasselMesh, Variant.TasselMaterial, Variant.TasselLocalTransform);
+		AddPart(Variant.FrameMesh, Variant.FrameMaterial, Variant.FrameLocalTransform);
+		++GeneratedLanternCount;
 	}
 
 	for (const TPair<FString, UHierarchicalInstancedStaticMeshComponent*>& Pair : Buckets)
 	{
+		Pair.Value->AddInstances(PendingTransforms.FindChecked(Pair.Value), false, false, false);
+		Pair.Value->BuildTreeIfOutdated(false, true);
 		if (IsValid(Pair.Value) && !Pair.Value->IsRegistered())
 		{
 			Pair.Value->RegisterComponent();
 		}
 	}
 	GeneratedHISMGroupCount = Buckets.Num();
+	UE_LOG(LogLanternCloner, Log, TEXT("Generation complete %s: lanterns=%d meshInstances=%d groups=%d sync build"),
+		*GetPathName(), GeneratedLanternCount, GeneratedMeshInstanceCount, GeneratedHISMGroupCount);
 }

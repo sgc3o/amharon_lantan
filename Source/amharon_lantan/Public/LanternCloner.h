@@ -10,10 +10,16 @@ class USceneComponent;
 class UStaticMesh;
 
 UENUM(BlueprintType)
-enum class ELanternHeightMode : uint8
+enum class ELanternClonerMode : uint8
 {
-	VerticalSpacing,
-	TotalHeight
+	Linear
+};
+
+UENUM(BlueprintType)
+enum class ELanternCloneMode : uint8
+{
+	Random,
+	Shuffle
 };
 
 USTRUCT(BlueprintType)
@@ -69,6 +75,12 @@ class AMHARON_LANTAN_API ALanternCloner : public AActor
 public:
 	ALanternCloner();
 	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void PostLoad() override;
+	virtual void PostRegisterAllComponents() override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostEditMove(bool bFinished) override;
+#endif
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner")
 	TObjectPtr<USceneComponent> SceneRoot;
@@ -76,56 +88,35 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Variants")
 	TArray<FLanternVariantDefinition> LanternVariants;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="1", UIMin="1"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="LanternCloner now always creates one column per Actor"))
 	int32 ColumnCount = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="1", UIMin="1"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="LanternCloner now always creates one column per Actor"))
 	int32 DepthCount = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="1", UIMin="1"))
-	int32 VerticalCount = 24;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Cloner")
+	ELanternClonerMode Mode = ELanternClonerMode::Linear;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="1.0"))
-	float HorizontalSpacing = 100.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Cloner")
+	ELanternCloneMode CloneMode = ELanternCloneMode::Shuffle;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="1.0"))
-	float DepthSpacing = 150.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="1.0"))
-	float VerticalSpacing = 95.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout")
-	ELanternHeightMode HeightMode = ELanternHeightMode::VerticalSpacing;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="1.0", EditCondition="HeightMode == ELanternHeightMode::TotalHeight"))
-	float TotalHeight = 2185.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Layout", meta=(ClampMin="0.0", ClampMax="1.0"))
-	float Density = 1.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Foreground Gap")
-	bool bEnableForegroundCenterGap = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Foreground Gap", meta=(ClampMin="1", EditCondition="bEnableForegroundCenterGap"))
-	int32 ForegroundDepthLayerCount = 1;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Foreground Gap", meta=(ClampMin="0.0", EditCondition="bEnableForegroundCenterGap"))
-	float ForegroundGapHalfWidth = 75.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Foreground Gap", meta=(ClampMin="0.0", ClampMax="1.0", EditCondition="bEnableForegroundCenterGap"))
-	float ForegroundCenterDensity = 0.25f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Foreground Gap", meta=(EditCondition="bEnableForegroundCenterGap"))
-	bool bHardExcludeForegroundCenter = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Randomization")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Cloner", meta=(DisplayName="Seed"))
 	int32 RandomSeed = 1337;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Randomization", meta=(ClampMin="0.01"))
-	float RandomScaleMin = 0.9f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Cloner", meta=(DisplayName="Clone Count", ClampMin="1", UIMin="1"))
+	int32 VerticalCount = 24;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Randomization", meta=(ClampMin="0.01"))
-	float RandomScaleMax = 1.1f;
+	UPROPERTY(meta=(DeprecatedProperty))
+	float HorizontalSpacing = 100.0f;
+
+	UPROPERTY(meta=(DeprecatedProperty))
+	float DepthSpacing = 150.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Cloner", meta=(ClampMin="0.0", UIMin="0.0"))
+	float VerticalSpacing = 95.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Randomization", meta=(DisplayName="Scale Random", ClampMin="0.0", ClampMax="0.5", UIMin="0.0", UIMax="0.2"))
+	float ScaleRandom = 0.05f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Randomization", meta=(ClampMin="0.0"))
 	float RandomYawRange = 8.0f;
@@ -137,7 +128,7 @@ public:
 	float RandomRollRange = 2.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Randomization")
-	FVector RandomPositionOffset = FVector(8.0f, 8.0f, 12.0f);
+	FVector RandomPositionOffset = FVector::ZeroVector;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Randomization")
 	bool bAvoidConsecutiveSameShape = true;
@@ -151,20 +142,42 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Preview", meta=(ClampMin="1", EditCondition="bUsePreviewVerticalCount"))
 	int32 PreviewVerticalCount = 24;
 
+	/** Preview is explicit and capped across ALL columns/depth layers. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Preview", meta=(ClampMin="1", ClampMax="256"))
+	int32 PreviewMaxLanternCount = 64;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Rendering")
 	bool bCastShadows = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Cloner|Generation")
 	bool bGenerationEnabled = true;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Lantern Cloner|Stats")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
 	int32 GeneratedLanternCount = 0;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Lantern Cloner|Stats")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
 	int32 GeneratedMeshInstanceCount = 0;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Lantern Cloner|Stats")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
 	int32 GeneratedHISMGroupCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
+	TArray<int32> GeneratedVariantCounts;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
+	int32 MaxConsecutiveSameShapeRun = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
+	int32 MaxConsecutiveSameColorRun = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
+	int32 ForegroundCenterCandidateCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
+	int32 GeneratedForegroundCenterCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Cloner|Stats")
+	int32 GeneratedMidFarCenterCount = 0;
 
 	UFUNCTION(CallInEditor, BlueprintCallable, Category="Lantern Cloner|Generation")
 	void Generate();
@@ -175,14 +188,23 @@ public:
 	UFUNCTION(CallInEditor, BlueprintCallable, Category="Lantern Cloner|Generation")
 	void Clear();
 
+	UFUNCTION(CallInEditor, BlueprintCallable, Category="Lantern Cloner|Generation")
+	void Preview();
+
+	/** Read-only diagnostic for editor regression checks; never builds or changes data. */
+	UFUNCTION(BlueprintPure, Category="Lantern Cloner|Stats")
+	bool IsGeneratedDataConsistent() const;
+
 private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> GeneratedComponents;
 
-	void RebuildInstances();
+	bool bUpdatingInstances = false;
+	bool CanUpdateInstances() const;
+	void RebuildInstances(bool bPreview = false);
 	void ClearGeneratedComponents();
 	UHierarchicalInstancedStaticMeshComponent* FindOrCreateBucket(UStaticMesh* Mesh, UMaterialInterface* Material, TMap<FString, UHierarchicalInstancedStaticMeshComponent*>& Buckets);
 	int32 PopVariantFromShuffleBag(FRandomStream& Stream, TArray<int32>& Bag, int32 PreviousVariantIndex);
-	void RefillShuffleBag(FRandomStream& Stream, TArray<int32>& Bag) const;
-	float GetEffectiveVerticalSpacing(int32 EffectiveVerticalCount) const;
+	int32 PickRandomVariant(FRandomStream& Stream) const;
+	void RefillShuffleBag(FRandomStream& Stream, TArray<int32>& Bag, int32 PreviousVariantIndex) const;
 };

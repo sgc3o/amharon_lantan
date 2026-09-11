@@ -153,6 +153,15 @@
 		{
 			"Name": "MagicBulletLooks",
 			"Enabled": false
+		},
+		{
+			"Name": "Avalanche",
+			"Enabled": true,
+			"SupportedTargetPlatforms": [
+				"Win64",
+				"Linux",
+				"Mac"
+			]
 		}
 	]
 }
