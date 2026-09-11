@@ -162,6 +162,10 @@
 				"Linux",
 				"Mac"
 			]
+		},
+		{
+			"Name": "ClonerEffector",
+			"Enabled": true
 		}
 	]
 }
