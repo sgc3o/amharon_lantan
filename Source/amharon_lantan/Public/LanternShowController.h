@@ -7,6 +7,14 @@
 class USceneComponent;
 class ACEClonerActor;
 class ACEEffectorActor;
+class ALevelSequenceActor;
+
+UENUM(BlueprintType)
+enum class ELanternShowTimeSource : uint8
+{
+	Manual,
+	SequencePlayer
+};
 
 /** Named sections are diagnostic only in STEP 1. */
 UENUM(BlueprintType)
@@ -51,8 +59,8 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Lantern Show")
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	/** Master show clock in seconds. Keyframe this property in Sequencer. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Interp, BlueprintSetter=SetAnimationTime, BlueprintGetter=GetAnimationTime,
+	/** Master show clock in seconds. Editable directly when TimeSource is Manual. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, BlueprintSetter=SetAnimationTime, BlueprintGetter=GetAnimationTime,
 		Category="Lantern Show|1. Playback", meta=(ClampMin="0.0", ClampMax="320.0", UIMin="0.0", UIMax="320.0", Units="s"))
 	float AnimationTime = 0.0f;
 
@@ -61,6 +69,17 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Lantern Show|1. Playback")
 	float GetAnimationTime() const { return AnimationTime; }
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Lantern Show|1. Playback")
+	ELanternShowTimeSource TimeSource = ELanternShowTimeSource::Manual;
+
+	/** Main's placed Level Sequence Actor whose player supplies absolute time. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category="Lantern Show|1. Playback",
+		meta=(EditCondition="TimeSource == ELanternShowTimeSource::SequencePlayer"))
+	TObjectPtr<ALevelSequenceActor> TimeSequenceActor;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Lantern Show|3. Debug")
+	bool bSequenceTimeSourceValid = false;
 
 	/** Manual STEP 2 sway weight. Future steps may derive this from AnimationTime. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Interp, BlueprintSetter=SetSwayAmount, BlueprintGetter=GetSwayAmount,
@@ -162,6 +181,7 @@ public:
 	float FlightProgress = 0.0f;
 
 private:
+	void UpdateAnimationTimeFromSource();
 	void RefreshDiagnostics();
 	void ApplyStep2Sway();
 };

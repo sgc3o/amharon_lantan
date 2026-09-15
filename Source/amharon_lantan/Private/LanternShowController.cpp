@@ -3,6 +3,12 @@
 #include "Cloner/CEClonerActor.h"
 #include "Components/SceneComponent.h"
 #include "Effector/CEEffectorActor.h"
+#include "LevelSequenceActor.h"
+#include "LevelSequencePlayer.h"
+
+#if WITH_EDITOR
+#include "LevelSequenceEditorBlueprintLibrary.h"
+#endif
 
 ALanternShowController::ALanternShowController()
 {
@@ -20,6 +26,7 @@ ALanternShowController::ALanternShowController()
 void ALanternShowController::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateAnimationTimeFromSource();
 	RefreshDiagnostics();
 }
 
@@ -52,6 +59,42 @@ void ALanternShowController::SetSwayAmount(float InSwayAmount)
 {
 	SwayAmount = FMath::Clamp(InSwayAmount, 0.0f, 1.0f);
 	RefreshDiagnostics();
+}
+
+void ALanternShowController::UpdateAnimationTimeFromSource()
+{
+	bSequenceTimeSourceValid = false;
+	if (TimeSource != ELanternShowTimeSource::SequencePlayer || !IsValid(TimeSequenceActor))
+	{
+		return;
+	}
+
+#if WITH_EDITOR
+	// The editor Sequencer owns a separate evaluation player while stopped or
+	// scrubbing, so the placed actor's runtime player does not reflect its cursor.
+	// Read the editor's absolute global position when it is displaying our asset.
+	if (GetWorld() && !GetWorld()->IsGameWorld()
+		&& ULevelSequenceEditorBlueprintLibrary::GetCurrentLevelSequence() == TimeSequenceActor->GetSequence())
+	{
+		AnimationTime = FMath::Clamp(
+			ULevelSequenceEditorBlueprintLibrary::GetGlobalPosition(EMovieSceneTimeUnit::DisplayRate).Time,
+			0.0f,
+			FMath::Max(0.0f, ShowEndTime));
+		bSequenceTimeSourceValid = true;
+		return;
+	}
+#endif
+
+	// Runtime, PIE and MRQ use the placed Level Sequence Actor's player. This is
+	// an absolute qualified-frame time; DeltaSeconds is never accumulated here.
+	if (ULevelSequencePlayer* Player = TimeSequenceActor->GetSequencePlayer())
+	{
+		AnimationTime = FMath::Clamp(
+			static_cast<float>(Player->GetCurrentTime().AsSeconds()),
+			0.0f,
+			FMath::Max(0.0f, ShowEndTime));
+		bSequenceTimeSourceValid = true;
+	}
 }
 
 bool ALanternShowController::ConfigureStep2Sway(ACEClonerActor* InCloner, ACEEffectorActor* InEffector)
@@ -182,7 +225,10 @@ void ALanternShowController::ApplyStep2Sway()
 	SwayEffector->SetMagnitude(EffectiveSwayAmount);
 	SwayEffector->SetLocationStrength(FVector::ZeroVector);
 	SwayEffector->SetRotationStrength(FRotator(0.0f, YawAmplitude, RollAmplitude));
-	SwayEffector->SetScaleStrength(FVector::ZeroVector);
+	// NoiseField ScaleDelta is multiplicative: OneVector is the identity scale.
+	// ZeroVector collapses instances toward zero scale even though it looks like
+	// a conventional "zero offset" value.
+	SwayEffector->SetScaleStrength(FVector::OneVector);
 	SwayEffector->SetFrequency(FMath::Max(0.001f, NoiseSpatialFrequency));
 	SwayEffector->SetPan(AbsolutePan);
 }
