@@ -5,7 +5,8 @@ public class amharon_lantan : ModuleRules
 	public amharon_lantan(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
-		PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "ClonerEffector", "LevelSequence", "MovieScene" });
+		PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "ClonerEffector", "Niagara", "LevelSequence", "MovieScene", "MovieSceneTracks" });
+		PrivateDependencyModuleNames.AddRange(new[] { "RenderCore", "RHI" });
 
 		if (Target.bBuildEditor)
 		{
